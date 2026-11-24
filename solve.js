@@ -13,6 +13,16 @@
 /** The HTML escape table, in this order: & < > " ' */
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
+/**
+ * The characters the inline scanner acts on, by code: exactly the first
+ * characters of its tokens (backslash, backtick, *, [, and the five escaped
+ * characters & < > " '). The fast-path regex below is generated from this
+ * one list; any character added to the scanner's grammar must be added here.
+ */
+const INLINE_SPECIAL_CODES = [92, 96, 42, 91, 38, 60, 62, 34, 39]; // \ ` * [ & < > " '
+/** The same set as a regex (no /g/: test() must not move lastIndex). */
+const INLINE_SPECIAL_RE = new RegExp(`[${INLINE_SPECIAL_CODES.map((c) => (c === 92 || c === 91 ? '\\' : '') + String.fromCharCode(c)).join('')}]`);
+
 /** `text` with & < > " and ' escaped. */
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
@@ -221,6 +231,8 @@ const WS_RE = /\s/;
 
 /** `s` rendered inline; `env.link(target)` is a link's href. */
 function inline(s, env) {
+  // Construct-free fast path: with no special character the output is the input itself.
+  if (!INLINE_SPECIAL_RE.test(s)) return s;
   const re = /\\[\\`*_\[\]()#+\-.!>]|`|\*\*|\*|\[|[&<>"']/g;
   let out = '';
   let last = 0;
