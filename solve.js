@@ -162,6 +162,93 @@ function valueOf(key, raw) {
  * line ends.
  */
 function parseFrontMatter(text) {
+  const fast = parseFrontMatterFast(text);
+  return fast === null ? parseFrontMatterSlow(text) : fast;
+}
+
+/**
+ * Front-matter fast path (item 8): one indexOf scan for the closing
+ * delimiter, then per-line indexOf(':') + trim into a fixed-shape object —
+ * no split('\n') of the whole body, no per-line regex, no body re-join.
+ * Returns null (bail to parseFrontMatterSlow) on ANY construct it does not
+ * recognise outright — quoted values, unknown/duplicate keys, empty values,
+ * value errors — so the slow path still produces every such error message
+ * exactly as before. Only a fully recognised, fully validated front matter
+ * returns here (the 'no title' error is returned directly, same message).
+ */
+function parseFrontMatterFast(text) {
+  if (!text.startsWith('---\n')) return null;
+  // First line exactly '---': its closing line is the first later line exactly '---'.
+  let j = text.indexOf('\n---', 3);
+  let closeEnd = -1;
+  while (j !== -1) {
+    const after = j + 4;
+    if (after === text.length) {
+      closeEnd = after;
+      break;
+    }
+    if (text.charCodeAt(after) === 10) {
+      closeEnd = after + 1;
+      break;
+    }
+    j = text.indexOf('\n---', after);
+  }
+  if (closeEnd === -1) return null;
+  const data = {};
+  let hasTitle = false;
+  let p = 4;
+  while (p < j) {
+    const e = text.indexOf('\n', p);
+    const lineEnd = e === -1 || e > j ? j : e;
+    const line = text.slice(p, lineEnd);
+    p = lineEnd + 1;
+    if (line === '') continue;
+    const c0 = line.charCodeAt(0);
+    if (c0 === 35) continue; // a '#' comment line
+    if (c0 === 32 || c0 === 9) {
+      let blank = true;
+      for (let k = 0; k < line.length; k++) {
+        const cc = line.charCodeAt(k);
+        if (cc !== 32 && cc !== 9) {
+          blank = false;
+          break;
+        }
+      }
+      if (blank) continue;
+      return null; // leading whitespace before a key: the slow path errors
+    }
+    let k = 0;
+    while (k < line.length) {
+      const cc = line.charCodeAt(k);
+      if ((cc >= 97 && cc <= 122) || cc === 95) k++;
+      else break;
+    }
+    if (k === 0 || k >= line.length || line.charCodeAt(k) !== 58) return null;
+    const key = line.slice(0, k);
+    let raw;
+    if (k + 1 === line.length) raw = '';
+    else if (line.charCodeAt(k + 1) === 32) raw = line.slice(k + 2);
+    else return null; // 'key:value': the slow path errors
+    let rEnd = raw.length;
+    while (rEnd > 0) {
+      const cc = raw.charCodeAt(rEnd - 1);
+      if (cc === 32 || cc === 9) rEnd--;
+      else break;
+    }
+    if (rEnd !== raw.length) raw = raw.slice(0, rEnd);
+    if (!KEYS.includes(key)) return null;
+    if (Object.hasOwn(data, key)) return null;
+    if (raw === '') return null;
+    const v = valueOf(key, raw);
+    if ('error' in v) return null;
+    data[key] = v.value;
+    if (key === 'title') hasTitle = true;
+  }
+  if (!hasTitle) return { error: 'no title' };
+  return { data, body: text.slice(closeEnd) };
+}
+
+function parseFrontMatterSlow(text) {
   const lines = text.split('\n');
   if (lines[0] !== '---') return { error: 'no front matter' };
   let close = -1;
